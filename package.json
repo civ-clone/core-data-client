@@ -1,0 +1,36 @@
+{
+  "name": "@civ-clone/core-data-client",
+  "version": "0.1.0",
+  "description": "How a game talks to a client that isn't in the same process: requests and their replies over named channels, and a game's data objects sent as patches and rebuilt on the other side.",
+  "repository": "git@github.com:civ-clone/core-data-client.git",
+  "keywords": [
+    "typescript",
+    "civilization"
+  ],
+  "author": "dom111 <dom111@users.noreply.github.com>",
+  "license": "MIT",
+  "private": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "npm run ts:compile && npm run prettier:format",
+    "prettier:check": "prettier --config .prettierrc --check '**/*.ts'",
+    "prettier:format": "prettier --config .prettierrc '**/*.ts' --write",
+    "test": "ts-mocha ./tests/*.test.ts",
+    "ts:compile": "tsc --build tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/chai": "^4.0",
+    "@types/mocha": "^9.0",
+    "@types/node": "^14.0",
+    "chai": "^4.0",
+    "mocha": "^9.0",
+    "prettier": "^2.0",
+    "ts-mocha": "^9.0",
+    "typescript": "^4.0"
+  },
+  "dependencies": {
+    "@civ-clone/core-data-object": "^0.1.17"
+  }
+}
