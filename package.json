@@ -1,6 +1,6 @@
 {
   "name": "@civ-clone/core-data-client",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "How a game talks to a client that isn't in the same process: requests and their replies over named channels, and a game's data objects sent as patches and rebuilt on the other side.",
   "repository": "git@github.com:civ-clone/core-data-client.git",
   "keywords": [
