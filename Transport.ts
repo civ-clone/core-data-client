@@ -1,4 +1,4 @@
-import { Request, RequestArgs, RequestReturn } from './Request';
+import { Request, RequestReturn } from './Request';
 import { ObjectMap } from '@civ-clone/core-data-object/DataObject';
 
 // How two sides of a game talk (a game running in a worker and the page that shows it, say): named channels, each with
@@ -70,13 +70,10 @@ export interface Transport<DataMap extends TransportDataMap> {
     handler: TransportReceiveHandler<DataMap[Channel]>
   ): TransportDisposer;
 
-  request<
-    RequestType extends Request,
-    Args extends any[] = RequestArgs<RequestType>,
-    Return extends any = RequestReturn<RequestType>
-  >(
-    request: Request
-  ): Promise<Return>;
+  /** Asks, and resolves with what the request says it returns. A request carries one argument at most. */
+  request<RequestType extends Request>(
+    request: RequestType
+  ): Promise<RequestReturn<RequestType>>;
 
   /** The answer to the request `id`, which the asking side matches it to. */
   reply<Channel extends keyof DataMap>(

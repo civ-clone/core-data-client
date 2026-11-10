@@ -13,6 +13,9 @@ export class Request<Args extends any[] = any[], Return extends any = any>
 {
   #args: Args;
   #channel: string;
+  // Never set. Nothing else in the class says what a request returns, and without it the compiler can't tell one
+  //  request's reply from another's (civ-clone/web-renderer#872).
+  declare readonly _return?: Return;
 
   constructor(channel: string, ...args: Args) {
     this.#args = args;

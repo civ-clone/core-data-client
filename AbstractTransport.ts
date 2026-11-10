@@ -1,4 +1,4 @@
-import { Request, RequestArgs, RequestReturn } from './Request';
+import { Request, RequestReturn } from './Request';
 import {
   RequestId,
   Transport,
@@ -28,6 +28,13 @@ export class RequestFailed extends Error {
 //  device. Nothing is given up on: a reply that comes after this still resolves its request.
 export const defaultSilenceTimeout = 30_000;
 
+// How many times longer the other side is given before it has said anything at all: it may still be loading, on a slow
+//  connection, and that is no reason to say it has stopped answering (civ-clone/web-renderer#871).
+export const startingSilenceFactor = 4;
+
+// What a request rejects with when its transport is disposed of while it waits, or is used after that.
+export const disposedMessage = 'The transport is no longer in use.';
+
 // The timers the silence is kept with, which a test stands in for to run one out without waiting.
 export type TransportTimers = {
   set(callback: () => void, timeout: number): unknown;
@@ -36,6 +43,11 @@ export type TransportTimers = {
 
 export type AbstractTransportOptions = {
   timers?: TransportTimers;
+  /**
+   * How long the other side may say nothing while a request waits on it, in milliseconds: `defaultSilenceTimeout`
+   * unless given. `null` never times it, for a side whose requests wait on a person, who may take any time at all.
+   */
+  silenceTimeout?: number | null;
 };
 
 const realTimers: TransportTimers = {
@@ -64,14 +76,24 @@ export abstract class AbstractTransport<
   // The channels replies are listened for on, and `requestFailed`: one listener each, for as long as the transport is
   //  in use, so that a reply that answers no waiting request is still heard, and dropped.
   #listening: Set<PropertyKey> = new Set();
+  // What stops each of those listeners, for `dispose`.
+  #disposers: TransportDisposer[] = [];
   #timers: TransportTimers;
-  // Whether the other side has said anything yet: until it has, it may still be loading, and its silence means nothing.
+  #silenceTimeout: number | null;
+  // Whether the other side has said anything yet. Its silence is timed either way, from the first request
+  //  (civ-clone/web-renderer#871): one that never starts says nothing, and is the one most worth hearing about. Until
+  //  it has spoken it is given `startingSilenceFactor` times as long.
   #heardFrom = false;
   // The silence being timed, while a request waits that no silence has been reported for.
   #silence: unknown = undefined;
+  #disposed = false;
 
-  constructor({ timers = realTimers }: AbstractTransportOptions = {}) {
+  constructor({
+    timers = realTimers,
+    silenceTimeout = defaultSilenceTimeout,
+  }: AbstractTransportOptions = {}) {
     this.#timers = timers;
+    this.#silenceTimeout = silenceTimeout;
   }
 
   abstract receive<Channel extends keyof DataMap>(
@@ -89,28 +111,48 @@ export abstract class AbstractTransport<
     return this.#outstanding.size;
   }
 
+  // Whether the other side has sent anything yet. Until it has, an error from it means it never started.
+  protected get heardFrom(): boolean {
+    return this.#heardFrom;
+  }
+
   // Each request is sent with an id of its own, which the reply echoes, so any number can be waiting on one channel at
   //  once and each gets its own reply, in whatever order they come (civ-clone/web-renderer#324, #470).
   //
   // A request the other side could not answer is answered with a `requestFailed` with its id, which rejects it, and
   //  `requestRejected` is called. A request waits for its reply however long it takes, but when the other side has
-  //  said nothing at all for `defaultSilenceTimeout` while one waits, `notAnswering` is called, once for each silence,
+  //  said nothing at all for the silence timeout while one waits, `notAnswering` is called, once for each silence,
   //  and no more than once for each request.
-  request<
-    RequestType extends Request,
-    Args extends any[] = RequestArgs<RequestType>,
-    Return extends any = RequestReturn<RequestType>
-  >(request: Request): Promise<Return> {
+  //
+  // It resolves with what the request says it returns (civ-clone/web-renderer#872). A message carries one piece of
+  //  data, so a request carries one argument at most: one made with more is rejected rather than sent short.
+  request<RequestType extends Request>(
+    request: RequestType
+  ): Promise<RequestReturn<RequestType>> {
     const channel = request.channel(),
-      id = this.#nextId++;
+      args = request.args();
+
+    if (this.#disposed) {
+      return Promise.reject(new RequestFailed(channel, disposedMessage));
+    }
+
+    if (args.length > 1) {
+      return Promise.reject(
+        new TypeError(
+          `A request carries one argument, and the one on "${channel}" has ${args.length}: put them in one object.`
+        )
+      );
+    }
+
+    const id = this.#nextId++;
 
     this.#listen(channel);
 
-    return new Promise<Return>((resolve, reject) => {
+    return new Promise<RequestReturn<RequestType>>((resolve, reject) => {
       this.#outstanding.set(id, { channel, resolve, reject, reported: false });
 
       try {
-        this.post(channel, request.args()[0], id);
+        this.post(channel, args[0], id);
       } catch (error) {
         this.#settle(id);
         reject(error);
@@ -144,8 +186,44 @@ export abstract class AbstractTransport<
     id?: RequestId
   ): void;
 
+  /**
+   * Ends the transport's use (civ-clone/web-renderer#871): each request still waiting is rejected, the silence is no
+   * longer timed, and the listeners for replies are removed. A request made after this is rejected too. A transport
+   * that listens to anything of its own stops that in its own `dispose`, and calls this.
+   */
+  dispose(): void {
+    if (this.#disposed) {
+      return;
+    }
+
+    this.#disposed = true;
+
+    this.failAll(disposedMessage);
+
+    this.#disposers.splice(0).forEach((dispose) => dispose());
+    this.#listening.clear();
+  }
+
+  // Rejects every request that waits, with `message`: for a transport that learns the other side has gone, or never
+  //  started. `requestRejected` is not called for them: the transport that calls this already knows. A reply that
+  //  comes for one of them after all is dropped, with a warning, as any reply to no waiting request is.
+  protected failAll(message: string): void {
+    const outstanding = [...this.#outstanding.values()];
+
+    this.#outstanding.clear();
+    this.#stopWatching();
+
+    outstanding.forEach(({ channel, reject }) =>
+      reject(new RequestFailed(channel, message))
+    );
+  }
+
   // The other side has sent a message, of any kind, so it is still there. Called by the transport for each one.
   protected heard(): void {
+    if (this.#disposed) {
+      return;
+    }
+
     this.#heardFrom = true;
     this.#stopWatching();
     this.#watch();
@@ -154,7 +232,7 @@ export abstract class AbstractTransport<
   // A request the other side could not answer has rejected with `error`. Here for a transport to tell someone.
   protected requestRejected(error: RequestFailed): void {}
 
-  // The other side has said nothing for `defaultSilenceTimeout` while requests on `channels` wait on it. Here for a
+  // The other side has said nothing for the silence timeout while requests on `channels` wait on it. Here for a
   //  transport to tell someone.
   protected notAnswering(channels: string[]): void {}
 
@@ -163,15 +241,18 @@ export abstract class AbstractTransport<
     return [...this.#outstanding.values()].filter(({ reported }) => !reported);
   }
 
-  // Times the silence, unless it is timed already, or nothing waits that it could be reported for.
+  // Times the silence, unless it is never timed, is timed already, or nothing waits that it could be reported for.
   #watch(): void {
     if (
-      !this.#heardFrom ||
+      this.#silenceTimeout === null ||
       this.#silence !== undefined ||
       this.#unreported().length === 0
     ) {
       return;
     }
+
+    const timeout =
+      this.#silenceTimeout * (this.#heardFrom ? 1 : startingSilenceFactor);
 
     this.#silence = this.#timers.set(() => {
       this.#silence = undefined;
@@ -188,14 +269,14 @@ export abstract class AbstractTransport<
 
       console.warn(
         `The other side has said nothing for ${
-          defaultSilenceTimeout / 1000
+          timeout / 1000
         } seconds while requests on ${channels
           .map((channel) => `"${channel}"`)
           .join(', ')} wait for it.`
       );
 
       this.notAnswering(channels);
-    }, defaultSilenceTimeout);
+    }, timeout);
   }
 
   #stopWatching(): void {
@@ -211,24 +292,26 @@ export abstract class AbstractTransport<
     if (!this.#listening.has('requestFailed')) {
       this.#listening.add('requestFailed');
 
-      this.receive(
-        'requestFailed' as keyof DataMap,
-        (failure: TransportFailure): void => {
-          const outstanding = this.#take(
-            failure?.channel,
-            failure?.id,
-            'requestFailed'
-          );
+      this.#disposers.push(
+        this.receive(
+          'requestFailed' as keyof DataMap,
+          (failure: TransportFailure): void => {
+            const outstanding = this.#take(
+              failure?.channel,
+              failure?.id,
+              'requestFailed'
+            );
 
-          if (!outstanding) {
-            return;
+            if (!outstanding) {
+              return;
+            }
+
+            const error = new RequestFailed(failure.channel, failure.message);
+
+            outstanding.reject(error);
+            this.requestRejected(error);
           }
-
-          const error = new RequestFailed(failure.channel, failure.message);
-
-          outstanding.reject(error);
-          this.requestRejected(error);
-        }
+        )
       );
     }
 
@@ -238,16 +321,18 @@ export abstract class AbstractTransport<
 
     this.#listening.add(channel);
 
-    this.receive(
-      channel as keyof DataMap,
-      (value: any, { id }: TransportMeta = {}): void => {
-        // Without an id it is no reply.
-        if (id === undefined) {
-          return;
-        }
+    this.#disposers.push(
+      this.receive(
+        channel as keyof DataMap,
+        (value: any, { id }: TransportMeta = {}): void => {
+          // Without an id it is no reply.
+          if (id === undefined) {
+            return;
+          }
 
-        this.#take(String(channel), id, 'reply')?.resolve(value);
-      }
+          this.#take(String(channel), id, 'reply')?.resolve(value);
+        }
+      )
     );
   }
 
