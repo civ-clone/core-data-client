@@ -71,7 +71,7 @@ describe('reconstituteData', (): void => {
     expect(String(logged[0])).to.equal('TypeError: missing gone');
   });
 
-  it('leaves the key of a missing reference off an object, and says so', (): void => {
+  it('keeps the key of a missing reference on an object, as `undefined`, and says so', (): void => {
     let rebuilt: any;
 
     const logged = errorsFrom(() => {
@@ -83,13 +83,13 @@ describe('reconstituteData', (): void => {
       });
     });
 
-    expect(rebuilt).to.deep.equal({ id: 'unit-1', moves: 1 });
-    expect('city' in rebuilt).to.equal(false);
-    expect(Object.keys(rebuilt)).to.deep.equal(['id', 'moves']);
+    expect(rebuilt.city).to.equal(undefined);
+    expect('city' in rebuilt).to.equal(true);
+    expect(Object.keys(rebuilt)).to.deep.equal(['id', 'city', 'moves']);
     expect(logged.map(String)).to.deep.equal(['TypeError: missing gone']);
   });
 
-  it('says a missing reference met twice once, and leaves it out both times', (): void => {
+  it('says a missing reference met more than once only once', (): void => {
     let rebuilt: any;
 
     const logged = errorsFrom(() => {
@@ -103,7 +103,12 @@ describe('reconstituteData', (): void => {
       });
     });
 
-    expect(rebuilt).to.deep.equal({ units: [], also: {} });
+    expect(rebuilt).to.deep.equal({
+      city: undefined,
+      units: [],
+      also: { city: undefined },
+    });
+    expect(Object.keys(rebuilt)).to.deep.equal(['city', 'units', 'also']);
     expect(logged.map(String)).to.deep.equal(['TypeError: missing gone']);
   });
 
@@ -131,7 +136,8 @@ describe('reconstituteData', (): void => {
     expect(rebuilt.city.units).to.deep.equal([rebuilt]);
     expect(rebuilt.city.units[0]).to.equal(rebuilt);
     expect(rebuilt.city.garrison).to.equal(rebuilt);
-    expect('home' in rebuilt).to.equal(false);
+    expect('home' in rebuilt).to.equal(true);
+    expect(rebuilt.home).to.equal(undefined);
     expect(logged.map(String)).to.deep.equal(['TypeError: missing gone']);
   });
 });
