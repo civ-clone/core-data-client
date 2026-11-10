@@ -2,12 +2,32 @@ import { ObjectMap, PlainObject } from '@civ-clone/core-data-object/DataObject';
 
 // Rebuilds a game's data from the `ObjectMap` a `DataObject` serialises to: each object once, and every reference to it
 //  the same object again, cycles and all.
+//
+// A reference to an object that isn't in `objects` is left out: dropped from a list, and its key left off an object
+//  (so `'key' in rebuilt` is false), rather than leaving an `undefined` for every consumer to trip over
+//  (civ-clone/web-renderer#46, #877). Each missing id is reported once, with a `TypeError`.
 
 export const reconstituteData = ({
   hierarchy,
   objects,
 }: ObjectMap): PlainObject => {
-  const seenObjects: Map<PlainObject, PlainObject> = new Map();
+  const seenObjects: Map<PlainObject, PlainObject> = new Map(),
+    reported: Set<string> = new Set();
+
+  // Whether `value` refers to an object that isn't there, said once for each id.
+  const missing = (value: any): boolean => {
+    if (!value || !value['#ref'] || value['#ref'] in objects) {
+      return false;
+    }
+
+    if (!reported.has(value['#ref'])) {
+      reported.add(value['#ref']);
+
+      console.error(new TypeError(`missing ${value['#ref']}`));
+    }
+
+    return true;
+  };
 
   const getReferences = (value: any): PlainObject => {
     if (seenObjects.has(value)) {
@@ -20,11 +40,7 @@ export const reconstituteData = ({
       seenObjects.set(value, updated);
 
       value.forEach((value) => {
-        // A ref the frontend no longer holds is left out, rather than leaving an `undefined` hole for every consumer
-        //  of the list to trip over (civ-clone/web-renderer#46).
-        if (value && value['#ref'] && !(value['#ref'] in objects)) {
-          console.error(new TypeError(`missing ${value['#ref']}`));
-
+        if (missing(value)) {
           return;
         }
 
@@ -35,8 +51,10 @@ export const reconstituteData = ({
     }
 
     if (value && value['#ref']) {
-      if (!(value['#ref'] in objects)) {
-        console.error(new TypeError(`missing ${value['#ref']}`));
+      // Only the root, or an object that is itself a reference, gets here with one that is missing: it rebuilds to
+      //  `undefined`, which is not remembered.
+      if (missing(value)) {
+        return undefined as unknown as PlainObject;
       }
 
       const updated = getReferences(objects[value['#ref']]);
@@ -52,6 +70,10 @@ export const reconstituteData = ({
       seenObjects.set(value, updated);
 
       Object.entries(value).forEach(([key, childValue]) => {
+        if (missing(childValue)) {
+          return;
+        }
+
         updated[key] = getReferences(childValue);
       });
 
@@ -60,8 +82,6 @@ export const reconstituteData = ({
 
     return value;
   };
-
-  seenObjects.clear();
 
   return getReferences(hierarchy);
 };
