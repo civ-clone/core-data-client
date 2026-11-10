@@ -12,6 +12,7 @@ export declare class Request<
 > implements RequestInterface<Args, Return>
 {
   #private;
+  readonly _return?: Return;
   constructor(channel: string, ...args: Args);
   args(): Args;
   channel(): string;
