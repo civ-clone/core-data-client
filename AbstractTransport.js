@@ -12,7 +12,7 @@ var __classPrivateFieldGet = (this && this.__classPrivateFieldGet) || function (
 };
 var _AbstractTransport_instances, _AbstractTransport_nextId, _AbstractTransport_outstanding, _AbstractTransport_listening, _AbstractTransport_disposers, _AbstractTransport_timers, _AbstractTransport_silenceTimeout, _AbstractTransport_heardFrom, _AbstractTransport_silence, _AbstractTransport_disposed, _AbstractTransport_unreported, _AbstractTransport_watch, _AbstractTransport_stopWatching, _AbstractTransport_listen, _AbstractTransport_take, _AbstractTransport_settle;
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.AbstractTransport = exports.disposedMessage = exports.defaultSilenceTimeout = exports.RequestFailed = void 0;
+exports.AbstractTransport = exports.disposedMessage = exports.startingSilenceFactor = exports.defaultSilenceTimeout = exports.RequestFailed = void 0;
 // What a request the other side could not answer rejects with (civ-clone/web-renderer#470).
 class RequestFailed extends Error {
     constructor(channel, message) {
@@ -27,6 +27,9 @@ exports.RequestFailed = RequestFailed;
 //  players take their turns waits for them: about a second each late in a big game, and a few times that on a slow
 //  device. Nothing is given up on: a reply that comes after this still resolves its request.
 exports.defaultSilenceTimeout = 30000;
+// How many times longer the other side is given before it has said anything at all: it may still be loading, on a slow
+//  connection, and that is no reason to say it has stopped answering (civ-clone/web-renderer#871).
+exports.startingSilenceFactor = 4;
 // What a request rejects with when its transport is disposed of while it waits, or is used after that.
 exports.disposedMessage = 'The transport is no longer in use.';
 const realTimers = {
@@ -47,7 +50,8 @@ class AbstractTransport {
         _AbstractTransport_timers.set(this, void 0);
         _AbstractTransport_silenceTimeout.set(this, void 0);
         // Whether the other side has said anything yet. Its silence is timed either way, from the first request
-        //  (civ-clone/web-renderer#871): one that never starts says nothing, and is the one most worth hearing about.
+        //  (civ-clone/web-renderer#871): one that never starts says nothing, and is the one most worth hearing about. Until
+        //  it has spoken it is given `startingSilenceFactor` times as long.
         _AbstractTransport_heardFrom.set(this, false);
         // The silence being timed, while a request waits that no silence has been reported for.
         _AbstractTransport_silence.set(this, undefined);
@@ -118,7 +122,8 @@ class AbstractTransport {
         __classPrivateFieldGet(this, _AbstractTransport_listening, "f").clear();
     }
     // Rejects every request that waits, with `message`: for a transport that learns the other side has gone, or never
-    //  started. `requestRejected` is not called for them: the transport that calls this already knows.
+    //  started. `requestRejected` is not called for them: the transport that calls this already knows. A reply that
+    //  comes for one of them after all is dropped, with a warning, as any reply to no waiting request is.
     failAll(message) {
         const outstanding = [...__classPrivateFieldGet(this, _AbstractTransport_outstanding, "f").values()];
         __classPrivateFieldGet(this, _AbstractTransport_outstanding, "f").clear();
@@ -144,12 +149,12 @@ exports.AbstractTransport = AbstractTransport;
 _AbstractTransport_nextId = new WeakMap(), _AbstractTransport_outstanding = new WeakMap(), _AbstractTransport_listening = new WeakMap(), _AbstractTransport_disposers = new WeakMap(), _AbstractTransport_timers = new WeakMap(), _AbstractTransport_silenceTimeout = new WeakMap(), _AbstractTransport_heardFrom = new WeakMap(), _AbstractTransport_silence = new WeakMap(), _AbstractTransport_disposed = new WeakMap(), _AbstractTransport_instances = new WeakSet(), _AbstractTransport_unreported = function _AbstractTransport_unreported() {
     return [...__classPrivateFieldGet(this, _AbstractTransport_outstanding, "f").values()].filter(({ reported }) => !reported);
 }, _AbstractTransport_watch = function _AbstractTransport_watch() {
-    const timeout = __classPrivateFieldGet(this, _AbstractTransport_silenceTimeout, "f");
-    if (timeout === null ||
+    if (__classPrivateFieldGet(this, _AbstractTransport_silenceTimeout, "f") === null ||
         __classPrivateFieldGet(this, _AbstractTransport_silence, "f") !== undefined ||
         __classPrivateFieldGet(this, _AbstractTransport_instances, "m", _AbstractTransport_unreported).call(this).length === 0) {
         return;
     }
+    const timeout = __classPrivateFieldGet(this, _AbstractTransport_silenceTimeout, "f") * (__classPrivateFieldGet(this, _AbstractTransport_heardFrom, "f") ? 1 : exports.startingSilenceFactor);
     __classPrivateFieldSet(this, _AbstractTransport_silence, __classPrivateFieldGet(this, _AbstractTransport_timers, "f").set(() => {
         __classPrivateFieldSet(this, _AbstractTransport_silence, undefined, "f");
         const unreported = __classPrivateFieldGet(this, _AbstractTransport_instances, "m", _AbstractTransport_unreported).call(this);

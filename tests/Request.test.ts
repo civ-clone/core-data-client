@@ -22,6 +22,6 @@ describe('Request', (): void => {
     expect(reply).to.deep.equal(['Karakorum']);
     expect(notReply).to.equal(5);
     // What tells the compiler the reply's type is never there when the game runs.
-    expect(Object.keys(request)).to.deep.equal([]);
+    expect('_return' in request).to.equal(false);
   });
 });

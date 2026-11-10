@@ -12,6 +12,7 @@ export declare class RequestFailed extends Error {
   constructor(channel: string, message: string);
 }
 export declare const defaultSilenceTimeout = 30000;
+export declare const startingSilenceFactor = 4;
 export declare const disposedMessage = 'The transport is no longer in use.';
 export type TransportTimers = {
   set(callback: () => void, timeout: number): unknown;

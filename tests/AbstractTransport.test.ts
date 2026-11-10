@@ -4,6 +4,7 @@ import {
   TransportTimers,
   defaultSilenceTimeout,
   disposedMessage,
+  startingSilenceFactor,
 } from '../AbstractTransport';
 import { Request } from '../Request';
 import { TransportMeta } from '../Transport';
@@ -261,15 +262,31 @@ describe('AbstractTransport', (): void => {
 
     transport.request(new Ask('ask'));
 
-    // A side that never starts says nothing, ever: it is the one most worth hearing about.
+    // A side that never starts says nothing, ever: it is the one most worth hearing about. It may only be slow to
+    //  load, though, so it is given longer than one that has spoken.
     expect(transport.heardAnything).to.equal(false);
     expect(
       [...timers.pending.values()].map(({ timeout }) => timeout)
-    ).to.deep.equal([defaultSilenceTimeout]);
+    ).to.deep.equal([defaultSilenceTimeout * startingSilenceFactor]);
 
-    await quietly(async () => timers.runOut());
+    const warned = await quietly(async () => timers.runOut());
 
     expect(transport.silences).to.deep.equal([['ask']]);
+    expect(warned[0]).to.contain(
+      `for ${(defaultSilenceTimeout * startingSilenceFactor) / 1000} seconds`
+    );
+  });
+
+  it('times the silence afresh, and for the usual time, once the other side has spoken', (): void => {
+    const timers = new ManualTimers(),
+      transport = new StubTransport({ timers });
+
+    transport.request(new Ask('ask'));
+    transport.deliver('ready', null);
+
+    expect(
+      [...timers.pending.values()].map(({ timeout }) => timeout)
+    ).to.deep.equal([defaultSilenceTimeout]);
   });
 
   it('never times the silence of a side told to wait as long as it takes', (): void => {
@@ -287,6 +304,7 @@ describe('AbstractTransport', (): void => {
     const timers = new ManualTimers(),
       transport = new StubTransport({ timers, silenceTimeout: 5_000 });
 
+    transport.deliver('ready', null);
     transport.request(new Ask('ask'));
 
     expect(

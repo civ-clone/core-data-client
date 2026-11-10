@@ -28,6 +28,10 @@ export class RequestFailed extends Error {
 //  device. Nothing is given up on: a reply that comes after this still resolves its request.
 export const defaultSilenceTimeout = 30_000;
 
+// How many times longer the other side is given before it has said anything at all: it may still be loading, on a slow
+//  connection, and that is no reason to say it has stopped answering (civ-clone/web-renderer#871).
+export const startingSilenceFactor = 4;
+
 // What a request rejects with when its transport is disposed of while it waits, or is used after that.
 export const disposedMessage = 'The transport is no longer in use.';
 
@@ -77,7 +81,8 @@ export abstract class AbstractTransport<
   #timers: TransportTimers;
   #silenceTimeout: number | null;
   // Whether the other side has said anything yet. Its silence is timed either way, from the first request
-  //  (civ-clone/web-renderer#871): one that never starts says nothing, and is the one most worth hearing about.
+  //  (civ-clone/web-renderer#871): one that never starts says nothing, and is the one most worth hearing about. Until
+  //  it has spoken it is given `startingSilenceFactor` times as long.
   #heardFrom = false;
   // The silence being timed, while a request waits that no silence has been reported for.
   #silence: unknown = undefined;
@@ -200,7 +205,8 @@ export abstract class AbstractTransport<
   }
 
   // Rejects every request that waits, with `message`: for a transport that learns the other side has gone, or never
-  //  started. `requestRejected` is not called for them: the transport that calls this already knows.
+  //  started. `requestRejected` is not called for them: the transport that calls this already knows. A reply that
+  //  comes for one of them after all is dropped, with a warning, as any reply to no waiting request is.
   protected failAll(message: string): void {
     const outstanding = [...this.#outstanding.values()];
 
@@ -237,15 +243,16 @@ export abstract class AbstractTransport<
 
   // Times the silence, unless it is never timed, is timed already, or nothing waits that it could be reported for.
   #watch(): void {
-    const timeout = this.#silenceTimeout;
-
     if (
-      timeout === null ||
+      this.#silenceTimeout === null ||
       this.#silence !== undefined ||
       this.#unreported().length === 0
     ) {
       return;
     }
+
+    const timeout =
+      this.#silenceTimeout * (this.#heardFrom ? 1 : startingSilenceFactor);
 
     this.#silence = this.#timers.set(() => {
       this.#silence = undefined;
